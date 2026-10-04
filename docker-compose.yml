@@ -16,21 +16,49 @@ services:
     container_name: secure-notes-db
     restart: unless-stopped
     # SECURITY: MySQL should only be accessible from the backend network.
-    # Exposing ports (like 3306:3306) to the host machine is avoided in production unless strictly necessary, 
-    # but for local development, we keep it internal.
     networks:
       - backend-net
     environment:
-      # SECURITY: Credentials should be passed via secure secrets managers in production.
-      # For this docker-compose setup, we use environment variables.
+      # SECURITY: In production, use Docker Secrets or AWS Secrets Manager.
       MYSQL_DATABASE: secure_notes
       MYSQL_USER: api_user
-      MYSQL_PASSWORD: api_password_123 # IN PRODUCTION: Inject via secure secrets
-      MYSQL_ROOT_PASSWORD: root_password_123 # IN PRODUCTION: Inject via secure secrets
+      MYSQL_PASSWORD: api_password_123
+      MYSQL_ROOT_PASSWORD: root_password_123
     volumes:
       - db-data:/var/lib/mysql
-      # Mount initialization scripts. These run automatically on first start.
       - ./db-init:/docker-entrypoint-initdb.d
+
+  api:
+    build:
+      context: ./backend
+    container_name: secure-notes-api
+    restart: unless-stopped
+    # SECURITY: API sits between frontend and backend networks.
+    networks:
+      - frontend-net
+      - backend-net
+    environment:
+      PORT: "8080"
+      DB_HOST: "db"
+      DB_USER: "api_user"
+      DB_PASS: "api_password_123"
+      DB_NAME: "secure_notes"
+      # SECURITY: Strong, rotating secrets should be used in production.
+      JWT_SECRET: "development_only_secret_key"
+    depends_on:
+      - db
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: secure-notes-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80" # Exposed to host for access
+    networks:
+      - frontend-net
+    depends_on:
+      - api
 
 volumes:
   db-data:
