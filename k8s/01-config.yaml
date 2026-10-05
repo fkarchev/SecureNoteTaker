@@ -1,0 +1,48 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-config
+  namespace: secure-notes
+data:
+  PORT: "8080"
+  DB_HOST: "mysql" # Matches the k8s service name
+  DB_USER: "api_user"
+  DB_NAME: "secure_notes"
+
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: db-secrets
+  namespace: secure-notes
+type: Opaque
+stringData:
+  # SECURITY: In a production AWS environment, these would be provisioned 
+  # via the External Secrets Operator syncing from AWS Secrets Manager.
+  MYSQL_ROOT_PASSWORD: root_password_123
+  MYSQL_PASSWORD: api_password_123
+  JWT_SECRET: k8s_development_only_secret_key
+
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql-initdb-config
+  namespace: secure-notes
+data:
+  01-schema.sql: |
+    USE secure_notes;
+    CREATE TABLE users (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        username VARCHAR(50) NOT NULL UNIQUE,
+        password_hash VARCHAR(255) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE TABLE notes (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        user_id INT NOT NULL,
+        title VARCHAR(100) NOT NULL,
+        content TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
