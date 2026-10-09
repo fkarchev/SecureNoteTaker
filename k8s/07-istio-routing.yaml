@@ -1,0 +1,35 @@
+apiVersion: networking.istio.io/v1alpha3
+kind: Gateway
+metadata:
+  name: secure-notes-gateway
+  namespace: secure-notes
+spec:
+  selector:
+    istio: ingressgateway # Maps to the default Istio ingress gateway controller
+  servers:
+  - port:
+      number: 80
+      name: http
+      protocol: HTTP
+    hosts:
+    - "*"
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: VirtualService
+metadata:
+  name: secure-notes-vs
+  namespace: secure-notes
+spec:
+  hosts:
+  - "*"
+  gateways:
+  - secure-notes-gateway
+  http:
+  - match:
+    - uri:
+        prefix: /
+    route:
+    - destination:
+        host: frontend.secure-notes.svc.cluster.local
+        port:
+          number: 80

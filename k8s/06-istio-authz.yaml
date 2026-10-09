@@ -1,0 +1,72 @@
+# 1. Enforce strict mutual TLS (mTLS) for the entire namespace
+apiVersion: security.istio.io/v1beta1
+kind: PeerAuthentication
+metadata:
+  name: default-mtls
+  namespace: secure-notes
+spec:
+  mtls:
+    mode: STRICT
+---
+# 2. Default deny all at Layer 7
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: default-deny-all
+  namespace: secure-notes
+spec:
+  {} # Empty spec means deny all
+---
+# 3. Allow Istio Ingress Gateway to access Frontend
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: frontend-allow-ingress
+  namespace: secure-notes
+spec:
+  selector:
+    matchLabels:
+      app: frontend
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        # Allow requests from the Istio ingress gateway principal
+        principals: ["cluster.local/ns/istio-system/sa/istio-ingressgateway-service-account"]
+---
+# 4. Allow Frontend to access API
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: api-allow-frontend
+  namespace: secure-notes
+spec:
+  selector:
+    matchLabels:
+      app: api
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        # Require cryptographically verified identity (SPIFFE) of the frontend
+        principals: ["cluster.local/ns/secure-notes/sa/frontend-sa"]
+  - to:
+    - operation:
+        methods: ["GET", "POST", "DELETE", "OPTIONS"]
+---
+# 5. Allow API to access MySQL
+apiVersion: security.istio.io/v1beta1
+kind: AuthorizationPolicy
+metadata:
+  name: mysql-allow-api
+  namespace: secure-notes
+spec:
+  selector:
+    matchLabels:
+      app: mysql
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        # Require cryptographically verified identity (SPIFFE) of the API
+        principals: ["cluster.local/ns/secure-notes/sa/api-sa"]

@@ -11,10 +11,41 @@ spec:
     metadata:
       labels:
         app: mysql
+  
     spec:
+      serviceAccountName: mysql-sa
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 999                 # Official MySQL Docker user ID
+        runAsGroup: 999
+        fsGroup: 999
+      
+      volumes:
+        - name: mysql-data
+          persistentVolumeClaim:
+            claimName: mysql-pvc
+        - name: tmp-volume
+          emptyDir: {}
+        - name: run-volume
+          emptyDir: {}
+
       containers:
       - name: mysql
         image: mysql:8.0
+        securityContext: 
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+        volumeMounts:
+            - name: mysql-data
+              mountPath: /var/lib/mysql
+            - name: tmp-volume
+              mountPath: /tmp
+            - name: run-volume
+              mountPath: /var/run/mysqld
+          
         env:
         - name: MYSQL_ROOT_PASSWORD
           valueFrom:

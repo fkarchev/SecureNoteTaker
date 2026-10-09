@@ -1,13 +1,12 @@
 # SECURITY: Multi-stage build ensures build tools (like compiler) are omitted from the production image
-FROM golang:1.21-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 WORKDIR /app
 COPY go.mod ./
-
-# Retrieve dependencies
-# SECURITY: Using go mod download ensures reproducible and secure dependency fetching
-RUN go mod download
 COPY . .
+
+# Retrieve dependencies and generate go.sum
+RUN go mod tidy
 
 # SECURITY: Build a statically linked binary. 
 # -w -s flags strip DWARF debugging info to prevent information leakage if reverse-engineered.

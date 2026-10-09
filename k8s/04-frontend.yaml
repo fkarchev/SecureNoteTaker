@@ -13,6 +13,7 @@ spec:
       labels:
         app: frontend
     spec:
+      serviceAccountName: frontend-sa
       containers:
       - name: frontend
         image: securitydemo-frontend:latest
@@ -32,6 +33,5 @@ spec:
     - protocol: TCP
       port: 80
       targetPort: 80
-      nodePort: 30080
-  # Expose via NodePort for local testing. In AWS, this would be a LoadBalancer or an Ingress.
-  type: NodePort
+  # SECURITY: Changed to ClusterIP because we are now using Istio Ingress Gateway for external access
+  type: ClusterIP
