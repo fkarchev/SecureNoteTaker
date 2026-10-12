@@ -48,6 +48,7 @@ spec:
         image: mysql:8.0
         securityContext: 
           readOnlyRootFilesystem: true
+          runAsNonRoot: true
           allowPrivilegeEscalation: false
           capabilities:
             drop:

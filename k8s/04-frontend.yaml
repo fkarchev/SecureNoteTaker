@@ -33,6 +33,7 @@ spec:
         image: securitydemo-frontend:latest
         imagePullPolicy: IfNotPresent
         securityContext:
+          runAsNonRoot: true
           readOnlyRootFilesystem: true
           allowPrivilegeEscalation: false
           capabilities:
