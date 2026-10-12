@@ -1,4 +1,3 @@
-# 1. Enforce strict mutual TLS (mTLS) for the entire namespace
 apiVersion: security.istio.io/v1beta1
 kind: PeerAuthentication
 metadata:
@@ -7,6 +6,19 @@ metadata:
 spec:
   mtls:
     mode: STRICT
+---
+apiVersion: networking.istio.io/v1alpha3
+kind: DestinationRule
+metadata:
+  name: default-mtls
+  namespace: secure-notes
+spec:
+  exportTo:
+  - "*"
+  host: "*.secure-notes.svc.cluster.local"
+  trafficPolicy:
+    tls:
+      mode: ISTIO_MUTUAL
 ---
 # 2. Default deny all at Layer 7
 apiVersion: security.istio.io/v1beta1

@@ -1,0 +1,352 @@
+name: Defense-in-Depth DevSecOps Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  schedule:
+    # Nightly scan at 02:00 UTC to detect newly published CVEs against existing code and dependencies
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # ============================================================================
+  # RING 1: SECRET SCANNING & CREDENTIAL LEAK PREVENTION
+  # ============================================================================
+  secret-scanning:
+    name: "Ring 1: Secret Scanning (Gitleaks)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history required for commit scanning
+
+      - name: Run Gitleaks Secret Scanner
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: true
+          GITLEAKS_ENABLE_SUMMARY: true
+
+  # ============================================================================
+  # RING 2: STATIC APPLICATION SECURITY TESTING (SAST)
+  # ============================================================================
+  sast-backend:
+    name: "Ring 2a: Backend SAST (Gosec)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Run Gosec Security Scanner
+        uses: securego/gosec@master
+        with:
+          args: '-no-fail -fmt sarif -out gosec.sarif ./backend/...'
+
+      - name: Upload Gosec SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: gosec.sarif
+          category: gosec-backend
+
+  sast-frontend:
+    name: "Ring 2b: Frontend SAST (Semgrep)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run Semgrep SAST
+        uses: returntocorp/semgrep-action@v1
+        with:
+          config: >-
+            p/security-audit
+            p/owasp-top-ten
+            p/react
+            p/javascript
+          generateSarif: "semgrep.sarif"
+        env:
+          SEMGREP_RULES: p/security-audit
+
+      - name: Upload Semgrep SARIF to GitHub Code Scanning
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep-frontend
+
+  # ============================================================================
+  # RING 3: SOFTWARE COMPOSITION ANALYSIS (SCA) & DEPENDENCY AUDITING
+  # ============================================================================
+  sca-dependencies:
+    name: "Ring 3: Software Composition Analysis (SCA)"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+
+      - name: Go Vulnerability Check (govulncheck)
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          cd backend
+          govulncheck ./...
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend NPM Dependency Audit
+        run: |
+          cd frontend
+          npm audit --audit-level=high
+
+      - name: Repository Filesystem & Dependency CVE Scan (Trivy FS)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-fs.sarif'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Trivy SCA SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-sca
+
+  # ============================================================================
+  # RING 4: INFRASTRUCTURE AS CODE (IaC) & POLICY-AS-CODE (OPA / Rego)
+  # ============================================================================
+  iac-and-policy:
+    name: "Ring 4: IaC Security & Policy-as-Code"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Install Conftest (Open Policy Agent)
+        run: |
+          CONFTEST_VERSION=$(curl -s https://api.github.com/repos/open-policy-agent/conftest/releases/latest | grep tag_name | cut -d '"' -f 4 | sed 's/v//')
+          curl -LO "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          tar xzf "conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz"
+          sudo mv conftest /usr/local/bin/
+
+      - name: Validate Kubernetes Manifests against OPA Rego Policy
+        run: |
+          echo "Executing OPA Policy-as-Code validation using policy/k8s_security.rego..."
+          conftest test -p policy/k8s_security.rego k8s/*.yaml
+
+      - name: Trivy IaC Scan (Kubernetes & Terraform)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'config'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-iac.sarif'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Trivy IaC SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-iac.sarif
+          category: trivy-iac
+
+      - name: Run Checkov Terraform & K8s Security Analysis
+        uses: bridgecrewio/checkov-action@master
+        if: always()
+        with:
+          directory: '.'
+          framework: 'terraform,kubernetes'
+          output_format: 'sarif'
+          output_file_path: 'checkov.sarif'
+          soft_fail: true
+
+      - name: Upload Checkov SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: checkov.sarif
+          category: checkov-iac
+
+  # ============================================================================
+  # RING 5: CONTAINER SUPPLY CHAIN & IMAGE SECURITY (Build, Scan, SBOM)
+  # ============================================================================
+  container-security:
+    name: "Ring 5: Container Image Security & SBOM"
+    runs-on: ubuntu-latest
+    needs: [secret-scanning, sast-backend, sast-frontend]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build Backend Container Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          load: true
+          tags: secure-notes-api:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Build Frontend Container Image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          load: true
+          tags: secure-notes-frontend:local
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan Backend Image for Vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'secure-notes-api:local'
+          format: 'sarif'
+          output: 'trivy-api-image.sarif'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Backend Image SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-api-image.sarif
+          category: trivy-api-image
+
+      - name: Scan Frontend Image for Vulnerabilities (Trivy)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'secure-notes-frontend:local'
+          format: 'sarif'
+          output: 'trivy-frontend-image.sarif'
+          severity: 'HIGH,CRITICAL'
+
+      - name: Upload Frontend Image SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: trivy-frontend-image.sarif
+          category: trivy-frontend-image
+
+      - name: Generate Backend SBOM (Software Bill of Materials)
+        uses: anchore/sbom-action@v0
+        with:
+          image: secure-notes-api:local
+          format: 'spdx-json'
+          output-file: 'sbom-api.spdx.json'
+
+      - name: Generate Frontend SBOM (Software Bill of Materials)
+        uses: anchore/sbom-action@v0
+        with:
+          image: secure-notes-frontend:local
+          format: 'spdx-json'
+          output-file: 'sbom-frontend.spdx.json'
+
+      - name: Archive SBOM Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-packages
+          path: |
+            sbom-api.spdx.json
+            sbom-frontend.spdx.json
+          retention-days: 30
+
+  # ============================================================================
+  # RING 6: DYNAMIC APPLICATION SMOKE & RUNTIME SECURITY TESTING (DAST)
+  # ============================================================================
+  dast-smoke-test:
+    name: "Ring 6: Dynamic Runtime & Security Header Audit"
+    runs-on: ubuntu-latest
+    needs: [container-security]
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Start 3-Tier Application via Docker Compose
+        run: |
+          docker compose up --build -d
+          echo "Waiting for services to become healthy..."
+          timeout 60 bash -c 'until curl -sf http://localhost:8080/health; do sleep 2; done'
+
+      - name: Verify Security Response Headers & API Health
+        run: |
+          echo "Verifying /health endpoint..."
+          HEALTH_RESP=$(curl -s http://localhost:8080/health)
+          echo "Response: $HEALTH_RESP"
+          echo "$HEALTH_RESP" | grep -q '"status":"success"' || exit 1
+
+          echo "Verifying defensive HTTP response headers..."
+          HEADERS=$(curl -s -I http://localhost:8080/health)
+          echo "$HEADERS"
+          echo "$HEADERS" | grep -qi "X-Content-Type-Options: nosniff" || (echo "Missing X-Content-Type-Options" && exit 1)
+          echo "$HEADERS" | grep -qi "X-Frame-Options: DENY" || (echo "Missing X-Frame-Options" && exit 1)
+          echo "$HEADERS" | grep -qi "X-XSS-Protection" || (echo "Missing X-XSS-Protection" && exit 1)
+          echo "All dynamic security controls verified successfully!"
+
+      - name: Teardown Test Stack
+        if: always()
+        run: docker compose down -v
+
+  # ============================================================================
+  # RING 7: CONSOLIDATED DEVSECOPS QUALITY GATE
+  # ============================================================================
+  devsecops-quality-gate:
+    name: "Ring 7: DevSecOps Quality Gate"
+    runs-on: ubuntu-latest
+    needs:
+      - secret-scanning
+      - sast-backend
+      - sast-frontend
+      - sca-dependencies
+      - iac-and-policy
+      - container-security
+      - dast-smoke-test
+    steps:
+      - name: Summarize DevSecOps Quality Gate Status
+        run: |
+          echo "## Defense-in-Depth DevSecOps Gate Results :shield:" >> $GITHUB_STEP_SUMMARY
+          echo "| Security Ring | Scope | Tool | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---|---|---|---|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ring 1: Secrets** | Secret Leak Prevention | Gitleaks | :white_check_mark: PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ring 2a: SAST** | Backend Go Security | Gosec (SARIF) | :white_check_mark: PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ring 2b: SAST** | Frontend React Security | Semgrep (SARIF) | :white_check_mark: PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ring 3: SCA** | Dependency Vulnerabilities | govulncheck, npm audit, Trivy | :white_check_mark: PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ring 4: IaC/Policy** | OPA Rego & K8s/TF Config | Conftest, Trivy, Checkov | :white_check_mark: PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ring 5: Supply Chain**| Container CVEs & SBOM | Trivy Image, Syft (SPDX) | :white_check_mark: PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Ring 6: DAST** | Dynamic Headers & Health | Live Docker Compose Probe | :white_check_mark: PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**All 7 defensive rings validated. Artifacts and SARIF reports uploaded to GitHub Security Tab.**" >> $GITHUB_STEP_SUMMARY

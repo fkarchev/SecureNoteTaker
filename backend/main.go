@@ -20,6 +20,15 @@ type JSONResponse struct {
 	Data    interface{} `json:"data,omitempty"`
 }
 
+func sendJSONError(w http.ResponseWriter, message string, statusCode int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	json.NewEncoder(w).Encode(JSONResponse{
+		Status:  "error",
+		Message: message,
+	})
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {

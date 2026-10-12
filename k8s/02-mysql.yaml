@@ -1,3 +1,15 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mysql-pvc
+  namespace: secure-notes
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -11,7 +23,6 @@ spec:
     metadata:
       labels:
         app: mysql
-  
     spec:
       serviceAccountName: mysql-sa
       securityContext:
@@ -28,6 +39,9 @@ spec:
           emptyDir: {}
         - name: run-volume
           emptyDir: {}
+        - name: initdb
+          configMap:
+            name: mysql-initdb-config
 
       containers:
       - name: mysql
@@ -38,13 +52,22 @@ spec:
           capabilities:
             drop:
               - ALL
+        resources:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
         volumeMounts:
-            - name: mysql-data
-              mountPath: /var/lib/mysql
-            - name: tmp-volume
-              mountPath: /tmp
-            - name: run-volume
-              mountPath: /var/run/mysqld
+          - name: mysql-data
+            mountPath: /var/lib/mysql
+          - name: tmp-volume
+            mountPath: /tmp
+          - name: run-volume
+            mountPath: /var/run/mysqld
+          - name: initdb
+            mountPath: /docker-entrypoint-initdb.d
           
         env:
         - name: MYSQL_ROOT_PASSWORD
@@ -69,13 +92,6 @@ spec:
               key: MYSQL_PASSWORD
         ports:
         - containerPort: 3306
-        volumeMounts:
-        - name: initdb
-          mountPath: /docker-entrypoint-initdb.d
-      volumes:
-      - name: initdb
-        configMap:
-          name: mysql-initdb-config
 ---
 apiVersion: v1
 kind: Service

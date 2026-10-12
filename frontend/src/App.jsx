@@ -15,6 +15,19 @@ function App() {
     if (token) fetchNotes()
   }, [token])
 
+  const parseResponse = async (res) => {
+    const contentType = res.headers.get('content-type')
+    if (contentType && contentType.includes('application/json')) {
+      try {
+        return await res.json()
+      } catch {
+        // Fallback to text if JSON parsing fails
+      }
+    }
+    const text = await res.text()
+    return { message: text }
+  }
+
   const handleAuth = async (e) => {
     e.preventDefault()
     setError('')
@@ -26,13 +39,15 @@ function App() {
         // SECURITY: React implicitly prevents XSS here, but sending raw input requires backend sanitization
         body: JSON.stringify({ username, password })
       })
-      const data = await res.json()
+      const data = await parseResponse(res)
       if (!res.ok) throw new Error(data.message || 'Authentication failed')
       
       if (isLogin) {
-        setToken(data.data.token)
+        setToken(data.data?.token)
         // SECURITY: For this demo we use localStorage, but HttpOnly cookies are strictly better for JWTs
-        localStorage.setItem('token', data.data.token)
+        if (data.data?.token) {
+          localStorage.setItem('token', data.data.token)
+        }
       } else {
         setIsLogin(true)
         setError('Registration successful. Please log in.')
@@ -51,7 +66,7 @@ function App() {
         if (res.status === 401) logout()
         throw new Error('Failed to fetch notes')
       }
-      const data = await res.json()
+      const data = await parseResponse(res)
       setNotes(data.data || [])
     } catch (err) {
       console.error(err)
@@ -69,7 +84,8 @@ function App() {
         },
         body: JSON.stringify({ title: newNoteTitle, content: newNoteContent })
       })
-      if (!res.ok) throw new Error('Failed to create note')
+      const data = await parseResponse(res)
+      if (!res.ok) throw new Error(data.message || 'Failed to create note')
       setNewNoteTitle('')
       setNewNoteContent('')
       fetchNotes()
@@ -84,7 +100,8 @@ function App() {
         method: 'DELETE',
         headers: { 'Authorization': `Bearer ${token}` }
       })
-      if (!res.ok) throw new Error('Failed to delete note')
+      const data = await parseResponse(res)
+      if (!res.ok) throw new Error(data.message || 'Failed to delete note')
       fetchNotes()
     } catch (err) {
       setError(err.message)

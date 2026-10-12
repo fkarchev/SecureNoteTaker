@@ -34,20 +34,20 @@ type Claims struct {
 
 func registerHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		sendJSONError(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var creds Credentials
 	// SECURITY: Strict input decoding.
 	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		sendJSONError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
 	// SECURITY: Validate input length (prevent DoS with huge inputs or bad data)
 	if len(creds.Username) < 3 || len(creds.Username) > 50 || len(creds.Password) < 8 {
-		http.Error(w, "Invalid username or password criteria (min 8 chars password)", http.StatusBadRequest)
+		sendJSONError(w, "Invalid username or password criteria (min 8 chars password)", http.StatusBadRequest)
 		return
 	}
 
@@ -55,7 +55,7 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	// bcrypt automatically handles salting. DefaultCost is currently 10.
 	hashedPassword, err := bcrypt.GenerateFromPassword([]byte(creds.Password), bcrypt.DefaultCost)
 	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		sendJSONError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -63,23 +63,24 @@ func registerHandler(w http.ResponseWriter, r *http.Request) {
 	_, err = db.Exec("INSERT INTO users (username, password_hash) VALUES (?, ?)", creds.Username, string(hashedPassword))
 	if err != nil {
 		// SECURITY: Log actual error internally, but return generic error to client to prevent information leakage
-		http.Error(w, "Username already exists or server error", http.StatusConflict)
+		sendJSONError(w, "Username already exists or server error", http.StatusConflict)
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(JSONResponse{Status: "success", Message: "User created"})
 }
 
 func loginHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+		sendJSONError(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 		return
 	}
 
 	var creds Credentials
 	if err := json.NewDecoder(r.Body).Decode(&creds); err != nil {
-		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		sendJSONError(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
@@ -89,13 +90,13 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	err := db.QueryRow("SELECT id, password_hash FROM users WHERE username = ?", creds.Username).Scan(&userID, &storedHash)
 	if err != nil {
 		// SECURITY: Prevent user enumeration by giving a generic message (don't reveal if user exists)
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		sendJSONError(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
 	// SECURITY: Securely compare hash with provided password
 	if err := bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(creds.Password)); err != nil {
-		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
+		sendJSONError(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
@@ -111,10 +112,11 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 	tokenString, err := token.SignedString(jwtKey)
 	if err != nil {
-		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		sendJSONError(w, "Internal server error", http.StatusInternalServerError)
 		return
 	}
 
+	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(JSONResponse{Status: "success", Data: map[string]string{"token": tokenString}})
 }
 
@@ -123,13 +125,13 @@ func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		authHeader := r.Header.Get("Authorization")
 		if authHeader == "" {
-			http.Error(w, "Missing authorization token", http.StatusUnauthorized)
+			sendJSONError(w, "Missing authorization token", http.StatusUnauthorized)
 			return
 		}
 
 		parts := strings.Split(authHeader, " ")
 		if len(parts) != 2 || parts[0] != "Bearer" {
-			http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+			sendJSONError(w, "Invalid authorization header format", http.StatusUnauthorized)
 			return
 		}
 
@@ -142,7 +144,7 @@ func AuthMiddleware(next http.Handler) http.Handler {
 		})
 
 		if err != nil || !token.Valid {
-			http.Error(w, "Invalid or expired token", http.StatusUnauthorized)
+			sendJSONError(w, "Invalid or expired token", http.StatusUnauthorized)
 			return
 		}
 

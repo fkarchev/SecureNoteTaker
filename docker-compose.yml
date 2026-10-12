@@ -1,5 +1,3 @@
-version: '3.8'
-
 # SECURITY: We define two isolated networks.
 # - frontend-net: Communication between Nginx (React) and the Go backend.
 # - backend-net: Communication between the Go backend and the MySQL database.
