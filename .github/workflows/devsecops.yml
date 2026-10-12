@@ -273,18 +273,12 @@ jobs:
           category: trivy-frontend-image
 
       - name: Generate Backend SBOM (Software Bill of Materials)
-        uses: anchore/sbom-action@v0
-        with:
-          image: secure-notes-api:local
-          format: 'spdx-json'
-          output-file: 'sbom-api.spdx.json'
+        run: |
+          trivy image --format spdx-json --output sbom-api.spdx.json secure-notes-api:local
 
       - name: Generate Frontend SBOM (Software Bill of Materials)
-        uses: anchore/sbom-action@v0
-        with:
-          image: secure-notes-frontend:local
-          format: 'spdx-json'
-          output-file: 'sbom-frontend.spdx.json'
+        run: |
+          trivy image --format spdx-json --output sbom-frontend.spdx.json secure-notes-frontend:local
 
       - name: Archive SBOM Artifacts
         uses: actions/upload-artifact@v4
